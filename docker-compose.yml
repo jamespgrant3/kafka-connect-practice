@@ -1,0 +1,177 @@
+version: "3.8"
+
+services:
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    environment:
+      PGADMIN_DEFAULT_EMAIL: pg@admin.com
+      PGADMIN_DEFAULT_PASSWORD: pgadmin
+    volumes:
+      - ./pgadmin/servers.json:/pgadmin4/servers.json
+    ports:
+      - "3000:80"
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    command: [
+        "postgres",
+        "-c",
+        "wal_level=logical",
+        # "-c",
+        # "max_replication_slots=10",
+        # "-c",
+        # "max_wal_senders=10",
+      ]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    image: jamespgrant3/api:latest
+    container_name: api
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      PORT: 8000
+      KAFKA_CLIENT_ID: my-client-id
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
+      interval: 5s
+      timeout: 10s
+      retries: 3
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      # connection string to zooKeeper
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      # maps listener names to security protocols
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      # network interfaces and ports the broker binds to.
+      # Typically one for inter-broker (29092) and one for external clients (9092)
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:29092,PLAINTEXT_HOST://0.0.0.0:9092
+      # addresses clients use to connect. "kafka:29092" for docker container communication, "localhost:9092" for host machine access.
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      # which listener brokers use to communicate with each other. Uses the internal listener on port 29092.
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      # replication factor for the internal __consumer_offsets topic. set to 1 for single-broker setups.
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "kafka-broker-api-versions",
+          "--bootstrap-server",
+          "localhost:9092",
+        ]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+
+  kafka_connect:
+    image: confluentinc/cp-kafka-connect:8.1.0
+    container_name: kafka-connect
+    depends_on:
+      kafka:
+        condition: service_healthy # Wait for Kafka to be healthy
+    ports:
+      - "8083:8083"
+    volumes:
+      - ./connectors:/usr/share/confluent-hub-components/custom-connectors
+    environment:
+      CONNECT_BOOTSTRAP_SERVERS: kafka:29092
+      CONNECT_GROUP_ID: connect-cluster-group
+      CONNECT_CONFIG_STORAGE_TOPIC: connect-configs
+      CONNECT_OFFSET_STORAGE_TOPIC: connect-offsets
+      CONNECT_STATUS_STORAGE_TOPIC: connect-status
+
+      # set replication factors to 1 for single-broker setup
+      CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: 1
+
+      CONNECT_KEY_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      CONNECT_VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      CONNECT_REST_ADVERTISED_HOST_NAME: kafka-connect
+      CONNECT_PLUGIN_PATH: /usr/share/java,/usr/share/confluent-hub-components
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8083"]
+      interval: 5s
+      timeout: 10s
+      retries: 3
+
+  kafbat:
+    image: ghcr.io/kafbat/kafka-ui:latest
+    container_name: kafbat-ui
+    depends_on:
+      - kafka
+    ports:
+      - "8080:8080"
+    environment:
+      DYNAMIC_CONFIG_ENABLED: "true"
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+
+  # connect:
+  #   image: debezium/connect:3.0.0.Final
+  #   container_name: connect
+  #   depends_on:
+  #     - kafka
+  #   ports:
+  #     - "8083:8083"
+  #   environment:
+  #     DYNAMIC_CONFIG_ENABLED: "true"
+  #     KAFKA_CLUSTERS_0_NAME: local
+  #     KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+
+  # -e GROUP_ID=1
+  # -e CONFIG_STORAGE_TOPIC=my-connect-configs
+  # -e OFFSET_STORAGE_TOPIC=my-connect-offsets
+  # -e ADVERTISED_HOST_NAME=$(echo $DOCKER_HOST | cut -f3  -d'/' | cut -f1 -d':')
+  # --link zookeeper:zookeeper
+  # --link kafka:kafka debezium/connect
+  #
+  # BOOTSTRAP_SERVERS: kafka:29092
+  # GROUP_ID: 1
+  # CONFIG_STORAGE_TOPIC: connect_configs
+  # OFFSET_STORAGE_TOPIC: connect_offsets
+  # STATUS_STORAGE_TOPIC: connect_statuses
+  # KEY_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+  # VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+  # CONNECT_KEY_CONVERTER_SCHEMAS_ENABLE: "false"
+  # CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
+
+volumes:
+  postgres_data:
