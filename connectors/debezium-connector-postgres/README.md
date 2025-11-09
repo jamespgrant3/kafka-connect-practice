@@ -9,9 +9,19 @@ Copyright Debezium Authors.
 Licensed under the [Apache License, Version 2.0](http://www.apache.org/licenses/LICENSE-2.0).
 The Antlr grammars within the debezium-ddl-parser module are licensed under the [MIT License](https://opensource.org/licenses/MIT).
 
+# Debezium PostgreSQL Connector
+
+**Version:** 3.3.1.Final
+
+This directory contains the official Debezium PostgreSQL connector plugin used in this project for Change Data Capture (CDC).
+
+For complete Debezium documentation, visit: https://debezium.io/documentation/reference/stable/connectors/postgresql.html
+
+---
+
 English | [Chinese](README_ZH.md) | [Japanese](README_JA.md) | [Korean](README_KO.md)
 
-# Debezium
+# Debezium (Official Documentation)
 
 Debezium is an open source project that provides a low latency data streaming platform for change data capture (CDC). You set up and configure Debezium to monitor your databases, and then your applications consume events for each row-level change made to the database. Only committed changes are visible, so your application doesn't have to worry about transactions or changes that are rolled back. Debezium provides a single model of all change events, so your application does not have to worry about the intricacies of each kind of database management system. Additionally, since Debezium records the history of data changes in durable, replicated logs, your application can be stopped and restarted at any time, and it will be able to consume all of the events it missed while it was not running, ensuring that all events are processed correctly and completely.
 

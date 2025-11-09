@@ -1,0 +1,14 @@
+{
+  "name": "neo4j-sink",
+  "config": {
+    "topics": "postgres.public.users",
+    "connector.class": "org.neo4j.connectors.kafka.sink.Neo4jConnector",
+    "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "key.converter.schemas.enable": "false",
+    "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "value.converter.schemas.enable": "true",
+    "neo4j.uri": "bolt://neo4j:7687",
+    "neo4j.authentication.type": "NONE",
+    "neo4j.cypher.topic.postgres.public.users": "MERGE (u:User {id: event.after.id}) SET u.firstName = event.after.firstName, u.lastName = event.after.lastName, u.isActive = event.after.isActive, u.createdAt = event.after.createdAt, u.updatedAt = event.after.updatedAt"
+  }
+}

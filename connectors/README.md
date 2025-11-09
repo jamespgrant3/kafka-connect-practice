@@ -9,27 +9,34 @@ Kafka Connect is a framework for streaming data between Apache Kafka and other s
 - **Source Connectors** - Import data FROM external systems INTO Kafka
 - **Sink Connectors** - Export data FROM Kafka INTO external systems
 
-This project uses a **Debezium PostgreSQL Source Connector** to capture database changes.
+This project demonstrates both connector types:
+- **Debezium PostgreSQL Source Connector** - Captures database changes and publishes to Kafka
+- **Neo4j Sink Connector** - Consumes Kafka events and writes to a graph database
 
 ## Directory Structure
 
 ```
 connectors/
-├── register-postgres.json          # Connector configuration
-└── debezium-connector-postgres/    # Debezium plugin JARs (v3.4.0.Alpha1)
-    ├── debezium-connector-postgres-3.4.0.Alpha1.jar
-    ├── debezium-core-3.4.0.Alpha1.jar
-    ├── debezium-api-3.4.0.Alpha1.jar
-    ├── postgresql-42.7.7.jar
-    └── ...
+├── register-postgres.json          # Debezium source connector configuration
+├── sink.pattern.neo4j.json         # Neo4j sink connector configuration
+├── debezium-connector-postgres/    # Debezium plugin JARs (v3.4.0.Alpha1)
+│   ├── debezium-connector-postgres-3.4.0.Alpha1.jar
+│   ├── debezium-core-3.4.0.Alpha1.jar
+│   ├── debezium-api-3.4.0.Alpha1.jar
+│   ├── postgresql-42.7.7.jar
+│   └── ...
+└── neo4j-connector/                # Neo4j plugin JAR (v5.1.18)
+    └── neo4j-kafka-connect-5.1.18.jar
 ```
 
-The plugin directory is mounted into Kafka Connect via docker-compose.yml at:
+The plugin directories are mounted into Kafka Connect via docker-compose.yml at:
 ```
 /usr/share/confluent-hub-components/custom-connectors
 ```
 
-## Connector Configuration
+## Connector Configurations
+
+### Debezium PostgreSQL Source Connector
 
 **File:** `register-postgres.json`
 
@@ -69,9 +76,59 @@ The plugin directory is mounted into Kafka Connect via docker-compose.yml at:
 
 `pgoutput` is PostgreSQL's native logical replication protocol (available since PostgreSQL 10). It requires no additional plugin installation and is production-ready. Alternative plugins include `decoderbufs` and `wal2json`, but pgoutput is the recommended default.
 
-## Managing the Connector
+### Neo4j Sink Connector
 
-### Register the Connector
+**File:** `sink.pattern.neo4j.json`
+
+```json
+{
+  "name": "neo4j-sink",
+  "config": {
+    "topics": "postgres.public.users",
+    "connector.class": "org.neo4j.connectors.kafka.sink.Neo4jConnector",
+    "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "key.converter.schemas.enable": "false",
+    "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "value.converter.schemas.enable": "true",
+    "neo4j.uri": "bolt://neo4j:7687",
+    "neo4j.authentication.type": "NONE",
+    "neo4j.cypher.topic.postgres.public.users": "MERGE (u:User {id: event.after.id}) SET u.firstName = event.after.firstName, u.lastName = event.after.lastName, u.isActive = event.after.isActive, u.createdAt = event.after.createdAt, u.updatedAt = event.after.updatedAt"
+  }
+}
+```
+
+#### Configuration Properties
+
+| Property | Value | Description |
+|----------|-------|-------------|
+| `name` | `neo4j-sink` | Unique name for this connector instance |
+| `topics` | `postgres.public.users` | Kafka topic to consume from |
+| `connector.class` | `Neo4jConnector` | Neo4j sink connector class |
+| `neo4j.uri` | `bolt://neo4j:7687` | Neo4j connection URI |
+| `neo4j.authentication.type` | `NONE` | No authentication (dev only) |
+| `neo4j.cypher.topic.*` | Cypher query | Custom Cypher query to process events |
+
+#### Cypher Query Pattern
+
+The connector uses a MERGE pattern to create or update user nodes:
+
+```cypher
+MERGE (u:User {id: event.after.id})
+SET u.firstName = event.after.firstName,
+    u.lastName = event.after.lastName,
+    u.isActive = event.after.isActive,
+    u.createdAt = event.after.createdAt,
+    u.updatedAt = event.after.updatedAt
+```
+
+This query:
+- Creates a `User` node if it doesn't exist (based on `id`)
+- Updates all properties if the node already exists
+- Handles both INSERT and UPDATE events from Debezium
+
+## Managing the Connectors
+
+### Register the Debezium Connector
 
 ```bash
 curl -X POST http://localhost:8083/connectors \
@@ -79,10 +136,24 @@ curl -X POST http://localhost:8083/connectors \
   -d @connectors/register-postgres.json
 ```
 
-### Check Connector Status
+### Register the Neo4j Connector
 
 ```bash
+curl -X POST http://localhost:8083/connectors \
+  -H "Content-Type: application/json" \
+  -d @connectors/sink.pattern.neo4j.json
+```
+
+### Check Connector Status
+
+Check Debezium connector:
+```bash
 curl http://localhost:8083/connectors/user-connector/status | jq
+```
+
+Check Neo4j connector:
+```bash
+curl http://localhost:8083/connectors/neo4j-sink/status | jq
 ```
 
 Expected output:
@@ -192,6 +263,29 @@ Each change event includes:
 }
 ```
 
+## Viewing Data in Neo4j
+
+After creating users via the API, view the synchronized graph data in Neo4j Browser:
+
+1. Open http://localhost:7474
+2. Run this Cypher query to see all users:
+```cypher
+MATCH (u:User) RETURN u
+```
+
+3. View user properties:
+```cypher
+MATCH (u:User)
+RETURN u.id, u.firstName, u.lastName, u.isActive, u.createdAt, u.updatedAt
+```
+
+4. Count users:
+```cypher
+MATCH (u:User) RETURN count(u)
+```
+
+The Neo4j Browser provides a visual graph interface where you can see nodes and their properties.
+
 ## Troubleshooting
 
 ### Check Kafka Connect Logs
@@ -207,12 +301,14 @@ docker logs kafka-connect
 docker exec -it postgres psql -U postgres -c "SHOW wal_level;"
 ```
 
-2. Check if the connector plugin is loaded:
+2. Check if the connector plugins are loaded:
 ```bash
 curl http://localhost:8083/connector-plugins | jq
 ```
 
-Look for `io.debezium.connector.postgresql.PostgresConnector`.
+Look for:
+- `io.debezium.connector.postgresql.PostgresConnector`
+- `org.neo4j.connectors.kafka.sink.Neo4jConnector`
 
 ### No Events Appearing
 
@@ -245,18 +341,44 @@ docker exec -it kafka kafka-console-consumer \
   --from-beginning
 ```
 
+### Neo4j Data Not Appearing
+
+1. Verify Neo4j connector is running:
+```bash
+curl http://localhost:8083/connectors/neo4j-sink/status | jq
+```
+
+2. Check if Neo4j is accessible:
+```bash
+docker logs neo4j
+```
+
+3. Verify data in Neo4j Browser (http://localhost:7474):
+```cypher
+MATCH (u:User) RETURN u LIMIT 10
+```
+
+4. Check connector logs for errors:
+```bash
+docker logs kafka-connect | grep -i neo4j
+```
+
 ## Learning Resources
 
 - [Debezium PostgreSQL Connector Docs](https://debezium.io/documentation/reference/stable/connectors/postgresql.html)
+- [Neo4j Kafka Connector Docs](https://neo4j.com/docs/kafka/current/)
 - [Kafka Connect REST API](https://docs.confluent.io/platform/current/connect/references/restapi.html)
 - [PostgreSQL Logical Replication](https://www.postgresql.org/docs/current/logical-replication.html)
+- [Neo4j Cypher Query Language](https://neo4j.com/docs/cypher-manual/current/)
 
 ## Next Steps
 
-After registering the connector, try:
+After registering both connectors, try:
 
 1. Create a user via the API
 2. View the CDC event in Kafbat UI
-3. Update the user and observe the before/after values
-4. Delete the user and see the tombstone event
-5. Compare CDC events with the direct `user.created` topic
+3. Verify the user appears in Neo4j Browser
+4. Update the user and observe the before/after values in Kafka
+5. Check that the Neo4j node was updated
+6. Delete the user and see the tombstone event
+7. Compare CDC events with the direct `user.created` topic

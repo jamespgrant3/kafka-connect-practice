@@ -15,6 +15,12 @@ This API manages user records in PostgreSQL while showcasing two different appro
 API Request → PostgreSQL Write → Two Event Streams:
                                   ├─ Direct: Kafka Producer (user.created topic)
                                   └─ CDC: Debezium Connector (captures all changes)
+                                           ↓
+                                    Kafka Topics (postgres.public.users)
+                                           ↓
+                                    Neo4j Sink Connector
+                                           ↓
+                                    Neo4j Graph Database
 ```
 
 ## Endpoints
@@ -99,6 +105,8 @@ CDC events include:
 - Schema information
 - Operation type
 
+These CDC events are then consumed by the Neo4j Sink Connector, which synchronizes the data into a graph database. This demonstrates a complete event-driven data pipeline from relational database to graph database.
+
 ## Tech Stack
 
 - **NestJS** - Progressive Node.js framework
@@ -156,9 +164,15 @@ Database connection (hard-coded for local dev):
 
 ## Observing Events
 
-After making API calls, observe the events in Kafbat UI (http://localhost:8080):
+After making API calls, observe the events across the entire pipeline:
 
-1. **user.created** topic - Application-level events (direct publish)
-2. **postgres.public.users** topic - CDC events (Debezium)
+1. **Kafbat UI** (http://localhost:8080) - View Kafka topics:
+   - **user.created** topic - Application-level events (direct publish)
+   - **postgres.public.users** topic - CDC events (Debezium)
 
-Compare the two event formats to understand the differences between explicit publishing and CDC patterns.
+2. **Neo4j Browser** (http://localhost:7474) - View synchronized graph data:
+   ```cypher
+   MATCH (u:User) RETURN u
+   ```
+
+Compare the two event formats to understand the differences between explicit publishing and CDC patterns. Then observe how CDC events flow from PostgreSQL → Kafka → Neo4j automatically.
